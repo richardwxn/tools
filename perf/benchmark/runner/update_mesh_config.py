@@ -43,8 +43,8 @@ def sanitize(res):
         remove_keys(anno, ['kubectl.kubernetes.io/last-applied-configuration'])
 
 
-def update_mesh(infile, update_func):
-    jj = yaml.load(open(infile), Loader=yaml.FullLoader)
+def update_mesh(meshconfig, update_func):
+    jj = yaml.load(meshconfig, Loader=yaml.FullLoader)
 
     sanitize(jj)
     mc = yaml.load(jj['data']["mesh"], Loader=yaml.FullLoader)
@@ -55,19 +55,19 @@ def update_mesh(infile, update_func):
     print(yaml.dump(jj))
 
 
-def enable_mixer(infile, mixer_server):
+def enable_mixer(meshconfig, mixer_server):
     def update_func(mc):
         mc["mixerCheckServer"] = mixer_server
         mc["mixerReportServer"] = mixer_server
 
-    update_mesh(infile, update_func)
+    update_mesh(meshconfig, update_func)
 
 
-def disable_mixer(infile):
+def disable_mixer(meshconfig):
     def update_func(mc):
         remove_keys(mc, ['mixerCheckServer', 'mixerReportServer'])
 
-    update_mesh(infile, update_func)
+    update_mesh(meshconfig, update_func)
 
 
 def getParser():
@@ -89,10 +89,10 @@ def main(argv):
     args = getParser().parse_args(argv)
 
     if args.func == "enable_mixer":
-        return enable_mixer(args.filename, args.mixer_server)
+        return enable_mixer(open(args.filename), args.mixer_server)
 
     if args.func == "disable_mixer":
-        return disable_mixer(args.filename)
+        return disable_mixer(open(args.filename))
 
 
 if __name__ == '__main__':

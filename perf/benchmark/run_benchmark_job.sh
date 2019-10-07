@@ -44,60 +44,78 @@ function setup_metrics() {
 }
 
 function collect_metrics() {
-  local GENERATE_GRAPH=$1
-  local PLOT_METRIC=$2
-  CSV_OUTPUT="$(mktemp /tmp/benchmark_XXXX.csv)"
+  # shellcheck disable=SC2155
+  export CSV_OUTPUT="$(mktemp /tmp/benchmark_XXXX.csv)"
   pipenv install
   pipenv run python3 fortio.py $FORTIO_CLIENT_URL --csv_output="$CSV_OUTPUT" --prometheus=$PROMETHEUS_URL \
    --csv StartTime,ActualDuration,Labels,NumThreads,ActualQPS,p50,p90,p99,cpu_mili_avg_telemetry_mixer,cpu_mili_max_telemetry_mixer,\
 mem_MB_max_telemetry_mixer,cpu_mili_avg_fortioserver_deployment_proxy,cpu_mili_max_fortioserver_deployment_proxy,\
 mem_MB_max_fortioserver_deployment_proxy,cpu_mili_avg_ingressgateway_proxy,cpu_mili_max_ingressgateway_proxy,mem_MB_max_ingressgateway_proxy
+}
 
-  if [[ "$GENERATE_GRAPH" = true ]];then
+function generate_graph() {
+    local PLOT_METRIC=$1
     BENCHMARK_GRAPH="$(mktemp /tmp/benchmark_graph_XXXX.html)"
     pipenv run python3 graph.py "${CSV_OUTPUT}" "${PLOT_METRIC}" --charts_output="${BENCHMARK_GRAPH}"
     dt=$(date +'%Y%m%d-%H')
     RELEASE="$(cut -d'/' -f3 <<<"${CB_GCS_FULL_STAGING_PATH}")"
     GRAPH_NAME="${RELEASE}.${dt}.${PLOT_METRIC}"
     gsutil -q cp "${BENCHMARK_GRAPH}" "gs://$CB_GCS_BUILD_PATH/${GRAPH_NAME}"
-  fi
 }
 
 echo "Setup istio release: $TAG"
 pushd "${ROOT}/istio-install"
-   ./setup_istio.sh "${TAG}"
+#   ./setup_istio.sh "${TAG}"
 popd
 # install dependencies
 cd "${WD}/runner"
 pipenv install
 # setup test
 pushd "${WD}"
-./setup_test.sh
+#./setup_test.sh
 popd
 
+# Setup fortio and prometheus
 setup_metrics
+
 echo "Start running perf benchmark test."
 # For adding or modifying configurations, refer to perf/benchmark/README.md
-# Configuration1
+# Configuration Set1: CPU and memory with mixer enabled
 EXTRA_ARGS="--serversidecar --baseline"
+MIXER_MODE="--mixer_mode mixer"
 CONN=16
-QPS=500,1000,1500,2000
-DURATION=300
-METRIC="cpu"
+QPS=10,100,500,1000,2000,3000
+DURATION=240
 # shellcheck disable=SC2086
-pipenv run python3 runner.py ${CONN} ${QPS} ${DURATION} ${EXTRA_ARGS}
-collect_metrics true ${METRIC}
-METRIC="mem"
-collect_metrics true ${METRIC}
+pipenv run python3 runner.py ${CONN} ${QPS} ${DURATION} ${EXTRA_ARGS} ${MIXER_MODE}
+collect_metrics
+METRICS=(cpu mem)
+for metric in "${METRICS[@]}"
+do
+  generate_graph "${metric}"
+done
 
-# Configuration2
+# Configuration Set2: Latency Quantiles with mixer enabled
 CONN=1,2,4,8,16,32,64
 QPS=1000
-METRIC="p90"
 # shellcheck disable=SC2086
-pipenv run python3 runner.py ${CONN} ${QPS} ${DURATION} ${EXTRA_ARGS}
-collect_metrics true ${METRIC}
+pipenv run python3 runner.py ${CONN} ${QPS} ${DURATION} ${EXTRA_ARGS} ${MIXER_MODE}
+collect_metrics
+METRICS=(p50 p90 p99)
+for metric in "${METRICS[@]}"
+do
+  generate_graph "${metric}"
+done
 
-#TODO: Add more configurations, e.g. no mixer vs mixer comparison.
+
+# Configuration Set3: CPU and memory with mixer disabled
+
+# Configuration Set4: Latency Quantiles with mixer disabled
+
+# Configuration Set5: CPU and memory with mixer v2
+
+# Configuration Set6: Latency Quantiles with mixer v2
+
+# TODO: Configuration Set5: Flame Graphs
 
 echo "perf benchmark test is done."

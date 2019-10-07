@@ -22,6 +22,7 @@ import subprocess
 import shlex
 import uuid
 from fortio import METRICS_START_SKIP_DURATION, METRICS_END_SKIP_DURATION
+import update_mesh_config as meshconfig
 
 POD = collections.namedtuple('Pod', ['name', 'namespace', 'ip', 'labels'])
 METADATA_EXCHANGE_YAML = "https://raw.githubusercontent.com/istio/proxy/master/" \
@@ -151,12 +152,12 @@ class Fortio:
         labels = self.run_id
         labels += "_qps_" + str(qps)
         labels += "_c_" + str(conn)
-        # TODO add mixer labels back
+        labels += "_" + str(self.size)
+        # Mixer label
         if mixer_mode is not None:
             self.mixer_mode = mixer_mode
         labels += "_"
         labels += self.mixer_mode
-        labels += "_" + str(self.size)
 
         if self.labels is not None:
             labels += "_" + self.labels
@@ -170,8 +171,10 @@ class Fortio:
         run_command_sync(cmd)
         # for nomixer and mixerv2
         if self.mixer_mode != "mixer":
+            meshconfig.disable_mixer()
             helm_command_mixer("install/kubernetes/helm/istio", "istio", "false", "istio-system")
         else:
+            meshconfig.enable_mixer()
             helm_command_mixer("install/kubernetes/helm/istio", "istio", "true", "istio-system")
         if self.mixer_mode == "mixerv2":
             kubectl_apply(METADATA_EXCHANGE_YAML)
@@ -327,10 +330,11 @@ def run(args):
         mesh=args.mesh,
         mixer_mode=args.mixer_mode)
 
-    for mixermode in args.mixer_mode:
+    for mixer_mode in args.mixer_mode:
         for conn in args.conn:
             for qps in args.qps:
-                fortio.run(conn=conn, qps=qps, duration=args.duration, size=args.size)
+                fortio.run(conn=conn, qps=qps, duration=args.duration,
+                           size=args.size, mixer_mode=mixer_mode)
 
 
 def csv_to_int(s):
