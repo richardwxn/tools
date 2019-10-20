@@ -73,18 +73,20 @@ function get_benchmark_data() {
   gsutil -q cp -r "${LOCAL_OUTPUT_DIR}" "gs://$GCS_BUCKET/${OUTPUT_DIR}/graphs"
 }
 
+# expects mixer configurations: mixer/nomixer/mixerv2nullvm as input
+MIXER_CONF=$1
 RELEASE_TYPE="dev"
 TAG=$(curl "https://storage.googleapis.com/istio-build/dev/latest")
 echo "Setup istio release: $TAG"
 pushd "${ROOT}/istio-install"
-   ./setup_istio_release.sh "${TAG}" "${RELEASE_TYPE}"
+#   ./setup_istio_release.sh "${TAG}" "${RELEASE_TYPE}"
 popd
 # install dependencies
 cd "${WD}/runner"
 pipenv install
 # setup test
 pushd "${WD}"
-./setup_test.sh
+#./setup_test.sh
 popd
 dt=$(date +'%Y%m%d-%H')
 export OUTPUT_DIR="benchmark_data.${dt}.${GIT_SHA}"
@@ -97,48 +99,37 @@ setup_metrics
 echo "Start running perf benchmark test, data would be saved to GCS bucket: ${GCS_BUCKET}/${OUTPUT_DIR}"
 # For adding or modifying configurations, refer to perf/benchmark/README.md
 EXTRA_ARGS="--serversidecar --baseline"
-# Configuration Set1: CPU and memory with mixer enabled
-MIXER_MODE="--mixer_mode mixer"
+
+if [[ "${MIXER_CONF}" == "mixer" ]] || [[ -z "${MIXER_CONF}" ]]
+then
+    # Configuration Set1,2: CPU/memory/latency quantiles with mixer enabled
+    MIXER_MODE="--mixer_mode mixer"
+elif [[ "${MIXER_CONF}" == "nomixer" ]]
+then
+    # Configuration Set3,4: CPU/memory/latency quantiles with mixer disabled
+    kubectl -n istio-system get cm istio -o yaml > /tmp/meshconfig.yaml
+    pipenv run python3 "${WD}"/update_mesh_config.py disable_mixer /tmp/meshconfig.yaml | kubectl -n istio-system apply -f /tmp/meshconfig.yaml
+    MIXER_MODE="--mixer_mode nomixer"
+elif [[ "${MIXER_CONF}" == "mixerv2nullvm" ]]
+then
+    # Configuration Set5,6: CPU/memory/latency quantiles with mixerv2 using NullVM.
+    kubectl -n istio-system apply -f https://raw.githubusercontent.com/istio/proxy/master/extensions/stats/testdata/istio/metadata-exchange_filter.yaml
+    kubectl -n istio-system apply -f https://raw.githubusercontent.com/istio/proxy/master/extensions/stats/testdata/istio/stats_filter.yaml
+    MIXER_MODE="--mixer_mode mixerv2-nullvm"
+else
+    echo "not supported mixer configurations: ${MIXER_CONF}"
+    exit 1
+fi
+
+# CPU and memory
 CONN=16
-QPS=10,100,500,1000,2000,3000
-DURATION=240
+QPS=10,100
+DURATION=100
 METRICS=(cpu mem)
 get_benchmark_data
 
-# Configuration Set2: Latency Quantiles with mixer enabled
-CONN=1,2,4,8,16,32,64
-QPS=1000
-METRICS=(p50 p90 p99)
-get_benchmark_data
-
-# Configuration Set3: CPU and memory with mixer disabled
-kubectl -n istio-system get cm istio -o yaml > /tmp/meshconfig.yaml
-pipenv run python3 ./update_mesh_config.py disable_mixer /tmp/meshconfig.yaml | kubectl -n istio-system apply -f /tmp/meshconfig.yaml
-MIXER_MODE="--mixer_mode nomixer"
-CONN=16
-QPS=10,100,500,1000,2000,3000
-DURATION=240
-METRICS=(cpu mem)
-get_benchmark_data
-
-# Configuration Set4: Latency Quantiles with mixer disabled
-CONN=1,2,4,8,16,32,64
-QPS=1000
-METRICS=(p50 p90 p99)
-get_benchmark_data
-
-# Configuration Set5: CPU and memory with mixerv2 using NullVM.
-kubectl -n istio-system apply -f https://raw.githubusercontent.com/istio/proxy/master/extensions/stats/testdata/istio/metadata-exchange_filter.yaml
-kubectl -n istio-system apply -f https://raw.githubusercontent.com/istio/proxy/master/extensions/stats/testdata/istio/stats_filter.yaml
-MIXER_MODE="--mixer_mode mixerv2-nullvm"
-CONN=16
-QPS=10,100,500,1000,2000,3000
-DURATION=240
-METRICS=(cpu mem)
-get_benchmark_data
-
-# Configuration Set6: Latency Quantiles with mixer v2 using NullVM.
-CONN=1,2,4,8,16,32,64
+# Latency Quantiles
+CONN=1,2
 QPS=1000
 METRICS=(p50 p90 p99)
 get_benchmark_data
