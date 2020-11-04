@@ -208,34 +208,45 @@ func healthz(w http.ResponseWriter, r *http.Request) {
 func writeMonitorStatusToDB(ms []SingleMonitorStatus, init bool) error {
 	monitorColumns := []string{"MonitorName", "Status", "UpdatedTime", "TestID", "Description", "FiredTimes", "LastFiredTime"}
 	curTime := time.Now()
-	lastFiredTime := time.Time{}
+	emptyTime := time.Time{}
 	var m []*spanner.Mutation
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	_, err := client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
 		for _, sms := range ms {
+			lastFiredTime := emptyTime
 			var monitorName string
 			if monitorName = getMonitorName(sms); monitorName == "" {
 				return fmt.Errorf("no alertname found")
 			}
-			log.Printf("Writing Alerts status to Spanner: name=%s, status=%s, Labels=%v, Annotations=%v, Description=%v\n",
-				monitorName, sms.Status, sms.Labels, sms.Annotations, sms.Description)
 
 			var firedTimes int64
 			if !init {
-				row, err := txn.ReadRow(ctx, mstableName, spanner.Key{testID, sms.Name}, []string{"firedTimes"})
+				row, err := txn.ReadRow(ctx, mstableName, spanner.Key{testID, sms.Name}, []string{"FiredTimes"})
 				if err != nil {
 					return err
 				}
 				if err := row.Column(0, &firedTimes); err != nil {
 					return err
 				}
+				var lft time.Time
+				row, err = txn.ReadRow(ctx, mstableName, spanner.Key{testID, sms.Name}, []string{"LastFiredTime"})
+				if err != nil {
+					return err
+				}
+				if err := row.Column(0, &lft); err != nil {
+					return err
+				}
 				if sms.Status == alertingStatus {
 					firedTimes++
 					lastFiredTime = curTime
+				} else {
+					lastFiredTime = lft
 				}
 			}
+			log.Printf("Writing Alerts status to Spanner: name=%s, status=%s, lastFiredTime=%v, Annotations=%v, Description=%v\n",
+				monitorName, sms.Status, lastFiredTime, sms.Annotations, sms.Description)
 			m = append(m, spanner.InsertOrUpdate(mstableName, monitorColumns,
 				[]interface{}{monitorName, sms.Status, curTime, testID, sms.Description, firedTimes, lastFiredTime}))
 		}
